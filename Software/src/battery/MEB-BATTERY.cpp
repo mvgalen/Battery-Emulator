@@ -1526,7 +1526,9 @@ void send_can_battery() {
 
     //HV request and DC/DC control lies in 0x503
     MEB_503.data.u8[3] = 0x00;
-    if (datalayer.battery.status.bms_status != FAULT && first_can_msg > 0 && currentMillis > first_can_msg + 2000) {
+    if (datalayer.battery.status.bms_status != FAULT && datalayer.system.settings.equipment_stop_active == false && 
+         first_can_msg > 0 && currentMillis > first_can_msg + 2000 && 
+         (labs(((int32_t)datalayer.battery.status.voltage_dV) - ((int32_t)datalayer_extended.meb.BMS_voltage_intermediate_dV)) < 200) ) {
       MEB_503.data.u8[1] = 0xB0;
       MEB_503.data.u8[3] = BMS_TARGET_HV_ON;  //BMS_TARGET_AC_CHARGING;  //TODO, should we try AC_2 or DC charging?
       MEB_503.data.u8[5] = 0x82;              // Bordnetz Active

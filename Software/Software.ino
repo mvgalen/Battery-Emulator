@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "src/charger/CHARGERS.h"
 #include "src/datalayer/datalayer.h"
+#include "src/datalayer/datalayer_extended.h"  //For "More battery info" webpage
 #include "src/devboard/utils/events.h"
 #include "src/devboard/utils/led_handler.h"
 #include "src/devboard/utils/value_mapping.h"
@@ -112,6 +113,11 @@ MyTimer connectivity_task_timer_10s(INTERVAL_10_S);
 MyTimer loop_task_timer_10s(INTERVAL_10_S);
 
 MyTimer check_pause_2s(INTERVAL_2_S);
+
+#define POSITIVE_PWM_Ch 0
+#define ON 1
+#define OFF 0
+#define PWM_OFF_DUTY 0
 
 // Contactor parameters
 #ifdef CONTACTOR_CONTROL
@@ -516,6 +522,10 @@ void init_CAN() {
 
 void init_contactors() {
   // Init contactor pins
+  ledcAttachChannel(PRECHARGE_PIN, 1000, 8,
+                    POSITIVE_PWM_Ch);  // Setup PWM Channel Frequency and Resolution
+  ledcWrite(PRECHARGE_PIN, PWM_OFF_DUTY);  // Set Positive PWM to 0%
+
 #ifdef CONTACTOR_CONTROL
 #ifdef PWM_CONTACTOR_CONTROL
   ledcAttachChannel(POSITIVE_CONTACTOR_PIN, PWM_Freq, PWM_Res,
@@ -783,6 +793,59 @@ void handle_contactors() {
 #ifdef CONTACTOR_CONTROL_DOUBLE_BATTERY
   handle_contactors_battery2();
 #endif
+
+if (datalayer.battery.status.bms_status != ACTIVE || datalayer.system.settings.equipment_stop_active) {
+    if (ledcRead(PRECHARGE_PIN) > 0)
+      Serial.println("Disabling Precharge BMS not active or equipment stop");
+      ledcWrite(PRECHARGE_PIN, 0);
+} else {
+  if (datalayer.system.status.battery_allows_contactor_closing) {
+    if (ledcRead(PRECHARGE_PIN) > 0)
+      Serial.println("Disabling Precharge contacts closed");
+      ledcWrite(PRECHARGE_PIN, 0);
+  } else {
+    uint32_t freq = ledcReadFreq(PRECHARGE_PIN);
+    uint16_t battery_voltage = datalayer.battery.status.voltage_dV;
+    uint16_t external_voltage = datalayer_extended.meb.BMS_voltage_intermediate_dV;
+    uint16_t delta_freq = 1;
+    static uint16_t prev_external_voltage = 0;
+    if (prev_external_voltage != external_voltage){
+  Serial.print("Battery: "); Serial.print(battery_voltage);
+  Serial.print(" Extern: ");Serial.print(external_voltage);
+      prev_external_voltage = external_voltage;
+      if (external_voltage < 500 || external_voltage > 8000){
+        freq = 22000;
+      } else {
+        if (ledcRead(PRECHARGE_PIN) == 0){
+          Serial.println("Enabling Precharge");
+
+          freq = 22000;
+        } else {
+          if (labs(((int32_t)battery_voltage) - ((int32_t)external_voltage)) > 150) {
+              delta_freq = 2000;
+          } else if (labs(((int32_t)battery_voltage) - ((int32_t)external_voltage)) > 80) {
+              delta_freq = labs(((int32_t)battery_voltage) - ((int32_t)external_voltage))*6;
+          } else {
+              delta_freq = labs(((int32_t)battery_voltage) - ((int32_t)external_voltage))*3;
+          }
+          if ( battery_voltage > external_voltage) {
+            freq += delta_freq;
+          } else {
+              freq -= delta_freq;
+          }
+          if (freq > 34000)
+            freq = 34000;
+          if (freq < 18000)
+            freq = 18000;
+        }
+      }
+      ledcWriteTone(PRECHARGE_PIN, freq);
+    Serial.print(" Freq set to: ");
+    Serial.println(freq);
+    }
+  } 
+}
+
 
 #ifdef CONTACTOR_CONTROL
   // First check if we have any active errors, incase we do, turn off the battery
